@@ -46,11 +46,14 @@ func (g *GamlooGame) PrintBoard() {
 func (g *GamlooGame) CheckState(userMessage UserGameResponseDto) (bool, error) {
 	g.Board = userMessage.NewState
 	g.LastState = userMessage.OldState
+	fmt.Println("turn", g.turn)
+	fmt.Println("userMessage.User", userMessage.User)
 	if userMessage.User == g.UserA {
 		g.turn = g.UserB
 	} else {
 		g.turn = g.UserA
 	}
+	fmt.Println("turn", g.turn)
 	return true, nil
 }
 

@@ -183,17 +183,14 @@ func (h *GameHandler) WebSocketGame(c *gin.Context) {
 
 		if userGameResponseDto.User != gamloo.turn {
 			fmt.Println("Not your turn")
-			if err := conn.WriteMessage(websocket.TextMessage, []byte("not your turn")); err != nil {
-				fmt.Println("Error writing message:", err)
-				break
-			}
+			broadcastToGame(gameID, []byte("{\"error\":\"not your turn\", \"turn\":\""+gamloo.turn+"\"}"))
 			continue
 		}
 
 		legal, _ := gamloo.CheckState(userGameResponseDto)
 		if !legal {
 			fmt.Println("Illegal move")
-			if err := conn.WriteMessage(websocket.TextMessage, []byte("illegal move")); err != nil {
+			if err := conn.WriteMessage(websocket.TextMessage, []byte("{\"error\":\"illegal move\"}")); err != nil {
 				fmt.Println("Error writing message:", err)
 				break
 			}
@@ -203,11 +200,14 @@ func (h *GameHandler) WebSocketGame(c *gin.Context) {
 		if checkWin {
 			fmt.Println("User", userGameResponseDto.User, "wins!")
 			broadcastToGame(gameID, []byte("win"))
-
 			break
 		}
 
-		newState, err := json.Marshal(gamloo.Board)
+		data := map[string]interface{}{
+			"board": gamloo.Board,
+			"turn":  gamloo.turn,
+		}
+		newState, err := json.Marshal(data)
 		if err != nil {
 			fmt.Println("Error marshalling new state:", err)
 			break
