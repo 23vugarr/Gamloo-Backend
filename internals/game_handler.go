@@ -10,8 +10,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type GameRoom struct {
+	game  *GamlooGame
+	conns []*websocket.Conn
+}
+
 var (
-	gameConnections  = make(map[string][]*websocket.Conn)
+	gameConnections  = make(map[string]GameRoom)
 	connectionsMutex sync.RWMutex
 )
 
@@ -19,12 +24,12 @@ func broadcastToGame(gameID string, message []byte) {
 	connectionsMutex.RLock()
 	defer connectionsMutex.RUnlock()
 
-	connections, exists := gameConnections[gameID]
+	room, exists := gameConnections[gameID]
 	if !exists {
 		return
 	}
 
-	for _, conn := range connections {
+	for _, conn := range room.conns {
 		err := conn.WriteMessage(websocket.TextMessage, message)
 		if err != nil {
 			fmt.Printf("Error broadcasting to connection: %v\n", err)
@@ -124,8 +129,6 @@ func (h *GameHandler) WebSocketGame(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "invalid game ID"})
 		return
 	}
-	gamloo := NewGamlooGame(gameIDInt, int(gameUsers.UserA), int(gameUsers.UserB))
-	gamloo.PrintBoard()
 
 	conn, err := h.ws.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -135,25 +138,54 @@ func (h *GameHandler) WebSocketGame(c *gin.Context) {
 	defer conn.Close()
 
 	connectionsMutex.Lock()
-	gameConnections[gameID] = append(gameConnections[gameID], conn)
+
+	room, exists := gameConnections[gameID]
+	if !exists {
+		gamloo := NewGamlooGame(gameIDInt, int(gameUsers.UserA), int(gameUsers.UserB))
+		gamloo.PrintBoard()
+
+		room = GameRoom{
+			game:  gamloo,
+			conns: []*websocket.Conn{},
+		}
+		room.conns = append(room.conns, conn)
+		gameConnections[gameID] = room
+
+		conn.WriteMessage(websocket.TextMessage, []byte("waiting for opponent to join"))
+	} else {
+		room.conns = append(room.conns, conn)
+		gameConnections[gameID] = room
+	}
 	connectionsMutex.Unlock()
 
 	defer func() {
 		connectionsMutex.Lock()
-		for i, c := range gameConnections[gameID] {
-			if c == conn {
-				gameConnections[gameID] = append(gameConnections[gameID][:i], gameConnections[gameID][i+1:]...)
-				break
+		// for i, c := range gameConnections[gameID].conns {
+		// 	if c == conn {
+		// 		fmt.Println("Removing connection from game:", gameID)
+		// 		// gameConnections[gameID].conns = append(gameConnections[gameID].conns[:i], gameConnections[gameID].conns[i+1:]...)
+		// 		gameCons := gameConnections[gameID]
+		// 		gameCons.conns = append(gameCons.conns[:i], gameCons.conns[i+1:]...)
+		// 		break
+		// 	}
+		// }
+		if len(gameConnections[gameID].conns) == 2 {
+			for _, c := range gameConnections[gameID].conns {
+				c.WriteMessage(websocket.TextMessage, []byte("game completed"))
+				c.Close()
 			}
-		}
-		if len(gameConnections[gameID]) == 0 {
 			delete(gameConnections, gameID)
+
+			h.gameRepo.CompleteGame(gameID)
+			fmt.Println("Game completed and removed from database")
 		}
 		connectionsMutex.Unlock()
 
 		conn.Close()
-		fmt.Println("WebSocket connection closed and removed from game", gameID)
+		fmt.Println("WebSocket connection closed and removed from game", gameID, gameConnections[gameID].conns)
 	}()
+
+	currentGame := gameConnections[gameID].game
 
 	for {
 		var userGameResponseDto UserGameResponseDto
@@ -172,7 +204,7 @@ func (h *GameHandler) WebSocketGame(c *gin.Context) {
 		}
 		fmt.Println("User game response DTO:", userGameResponseDto)
 
-		if userGameResponseDto.User != gamloo.UserA && userGameResponseDto.User != gamloo.UserB {
+		if userGameResponseDto.User != currentGame.UserA && userGameResponseDto.User != currentGame.UserB {
 			fmt.Println("Invalid user in message")
 			if err := conn.WriteMessage(websocket.TextMessage, []byte("invalid user")); err != nil {
 				fmt.Println("Error writing message:", err)
@@ -181,13 +213,13 @@ func (h *GameHandler) WebSocketGame(c *gin.Context) {
 			continue
 		}
 
-		if userGameResponseDto.User != gamloo.turn {
+		if userGameResponseDto.User != currentGame.turn {
 			fmt.Println("Not your turn")
-			broadcastToGame(gameID, []byte("{\"error\":\"not your turn\", \"turn\":\""+gamloo.turn+"\"}"))
+			broadcastToGame(gameID, []byte("{\"error\":\"not your turn\", \"turn\":\""+currentGame.turn+"\"}"))
 			continue
 		}
 
-		legal, _ := gamloo.CheckState(userGameResponseDto)
+		legal, _ := currentGame.CheckState(userGameResponseDto)
 		if !legal {
 			fmt.Println("Illegal move")
 			if err := conn.WriteMessage(websocket.TextMessage, []byte("{\"error\":\"illegal move\"}")); err != nil {
@@ -196,7 +228,7 @@ func (h *GameHandler) WebSocketGame(c *gin.Context) {
 			}
 			continue
 		}
-		checkWin, _ := gamloo.CheckWin()
+		checkWin, _ := currentGame.CheckWin()
 		if checkWin {
 			fmt.Println("User", userGameResponseDto.User, "wins!")
 			broadcastToGame(gameID, []byte("win"))
@@ -204,8 +236,8 @@ func (h *GameHandler) WebSocketGame(c *gin.Context) {
 		}
 
 		data := map[string]interface{}{
-			"board": gamloo.Board,
-			"turn":  gamloo.turn,
+			"board": currentGame.Board,
+			"turn":  currentGame.turn,
 		}
 		newState, err := json.Marshal(data)
 		if err != nil {

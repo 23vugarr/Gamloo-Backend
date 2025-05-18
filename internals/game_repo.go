@@ -61,3 +61,14 @@ func (r *GameRepo) GetUserIDsFromGameID(id string) (GameResponseDto, error) {
 	}
 	return game[0], nil
 }
+
+func (r *GameRepo) CompleteGame(id string) error {
+	_, _, err := r.client.From("games").Update(map[string]interface{}{
+		"completed": "true",
+	}, "", "").Eq("id", id).Execute()
+	if err != nil {
+		fmt.Println("Error completing game:", err)
+		return err
+	}
+	return nil
+}
