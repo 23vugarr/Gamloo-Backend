@@ -219,10 +219,10 @@ func (h *GameHandler) WebSocketGame(c *gin.Context) {
 			continue
 		}
 
-		legal, _ := currentGame.CheckState(userGameResponseDto)
+		legal, err := currentGame.CheckState(userGameResponseDto)
 		if !legal {
 			fmt.Println("Illegal move")
-			if err := conn.WriteMessage(websocket.TextMessage, []byte("{\"error\":\"illegal move\"}")); err != nil {
+			if err := conn.WriteMessage(websocket.TextMessage, []byte("{\"error\":\""+err.Error()+"\"}")); err != nil {
 				fmt.Println("Error writing message:", err)
 				break
 			}
